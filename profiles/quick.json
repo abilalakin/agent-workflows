@@ -1,0 +1,13 @@
+{
+  "plan": ["plan-stories"],
+  "build": "build",
+  "reviews": [],
+  "maxAttempts": 2,
+  "commit": true,
+  "commitType": "feat",
+  "push": false,
+  "skills": {
+    "plan-stories": ["planning-and-task-breakdown"],
+    "build": ["test-driven-development"]
+  }
+}

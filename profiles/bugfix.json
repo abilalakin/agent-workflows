@@ -1,0 +1,16 @@
+{
+  "plan": ["plan-stories"],
+  "build": "fix",
+  "reviews": [
+    { "step": "review-acceptance", "blocking": true }
+  ],
+  "maxAttempts": 2,
+  "commit": true,
+  "commitType": "fix",
+  "push": false,
+  "skills": {
+    "plan-stories": ["planning-and-task-breakdown"],
+    "fix": ["debugging-and-error-recovery", "systematic-debugging", "test-driven-development"],
+    "review-acceptance": ["verification-before-completion"]
+  }
+}
