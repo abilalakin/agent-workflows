@@ -7,7 +7,7 @@ can build one at a time. Write no code.
    or a bugfix with no documents, ask the human what is wanted.
 2. Split the work into stories. Each story:
    - fits one agent session with a fresh context,
-   - leaves the project working and the checks green,
+   - leaves the project working and the checks passing,
    - comes after the stories it depends on,
    - has two to six acceptance criteria that a test can check.
 3. For a bugfix, one story is normal. Its criteria are: the bug is reproduced

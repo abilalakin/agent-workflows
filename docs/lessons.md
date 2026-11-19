@@ -12,7 +12,7 @@ experiment code is in the git history.
   bigger than it needs to be.
 - **Builders must not widen the spec.** One builder wrote a broad new rule into
   the spec, and the reviewers then enforced it. New rules are follow-ups.
-- **Do not trust the builder's report.** The loop runs the check command
+- **Do not trust the builder's report.** The loop runs the checks
   itself, and the acceptance reviewer tests each criterion again. This caught a
   real regression that the builder's own tests missed.
 - **Retry with the review text works.** A fresh builder fixed a rejected story

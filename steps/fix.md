@@ -7,8 +7,8 @@ only memory. Fix the one bug in the Context below, then stop.
 2. Reproduce the bug with a failing test. If you cannot reproduce it, write
    what you tried under "Follow-ups" in the progress log and stop.
 3. Find the root cause. Say it in one or two sentences in the progress log.
-4. Fix the cause with the smallest change. The new test passes and the check
-   command exits 0.
+4. Fix the cause with the smallest change. The new test passes and every check
+   exits 0.
 5. Add any lesson for later steps under "Lessons".
 
 Scope rules:

@@ -29,13 +29,17 @@ For the first story in `task.json` that is not `done`:
 2. Build it by following `steps/<build step>.md` with the story as context.
    Use a fresh subagent, so each story starts with a clean context.
    `loop.py prompt <task>` prints the full prompt.
-3. Run the task's check command. If it fails, go to step 6.
+3. Run the task's checks. If one fails, go to step 6.
 4. Set the status to `reviewing`. For each entry in `reviews`, follow that step
    file in a fresh subagent. Each writes
    `reviews/<story>-a<attempt>-<step>.md` starting with `VERDICT: pass` or
    `VERDICT: fail`.
-5. If every blocking review passed, set the status to `done`, commit the story
-   on the task branch, push if the task says so, and take the next story.
+5. If every blocking review passed, set the status to `done` and commit the
+   story. Then take the next story.
+   - Default: commit on the branch `loop/<task>`. Push if the task says so.
+   - If the task has `pr` set: before step 1, create the branch
+     `loop/<task>/<story>` from the branch of the story before it. After the
+     commit, push it and open a PR that targets that earlier branch.
 6. Otherwise go back to step 1 with the failed check output or the review files
    as input. When `attempts` reaches `maxAttempts`, set the status to `blocked`
    and stop. Tell the human what blocks it.
@@ -49,4 +53,7 @@ Rules:
 - The builder never reviews its own work.
 - Only the human widens the scope. New ideas go under "Follow-ups" in
   `progress.md`.
-- Agents commit only passed stories, and only on the task branch.
+- Agents commit only passed stories, only on the task's branches, and only the
+  files the story changed. Files that were changed before the task stay out.
+- If the task sets `models`, use the model it names for each phase or step. A
+  model on a story wins.

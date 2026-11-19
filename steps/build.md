@@ -7,8 +7,8 @@ only memory. Do the one story in the Context below, then stop.
    if it has one (AGENTS.md, CLAUDE.md or similar).
 2. Write a test for each acceptance criterion. Run the tests and see the new
    ones fail.
-3. Write the smallest change that makes them pass. Run the check command until
-   it exits 0.
+3. Write the smallest change that makes them pass. Run the checks until every one
+   exits 0.
 4. Append to the progress log:
    - under "Lessons": anything a later step needs to know about this codebase.
    - under "Follow-ups": problems you saw that this story does not cover.
