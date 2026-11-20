@@ -17,7 +17,6 @@ from pathlib import Path
 HOME = Path(__file__).resolve().parent
 STATUSES = ["todo", "building", "reviewing", "done", "blocked"]
 PLAN_DOCS = ["prd.md", "architecture.md"]
-PR_COMMAND = "gh pr create --base {base} --head {branch} --title {title} --body-file {body_file}"
 
 
 class AgentFailed(Exception):
@@ -117,7 +116,7 @@ def review_path(name, story, step):
     return tdir(name) / "reviews" / f"{story['id']}-a{story['attempts']}-{step}.md"
 
 
-def make_prompt(name, task, step, story=None, kind="build", feedback=""):
+def make_prompt(name, task, step, story=None, kind="build", feedback="", extra=()):
     d = tdir(name)
     ctx = [f"- Task: {name}. {task.get('description', '')}", f"- Task folder: `{d}`"]
     for doc in PLAN_DOCS:
@@ -143,6 +142,7 @@ def make_prompt(name, task, step, story=None, kind="build", feedback=""):
     ctx.append(f"- Progress log: `{d / 'progress.md'}`")
     if kind == "review":
         ctx.append(f"- Write your review to: `{review_path(name, story, step)}`")
+    ctx += extra
     skills = task.get("skills", {}).get(step, [])
     if skills:
         ctx.append(f"- Skills: if your agent has any of these, load and follow them: {', '.join(skills)}. Skip the ones you do not have.")
@@ -235,68 +235,62 @@ def attempt(name, task, story, cmd, feedback):
     return "\n".join(failed)
 
 
-def start_story_branch(name, task, story):
-    """PR mode: each story gets a branch that starts from the story before it."""
-    current = git("rev-parse", "--abbrev-ref", "HEAD")
-    if story.get("branch"):
-        if current != story["branch"] and not git_ok(name, "switch", story["branch"]):
-            die(f"cannot switch to {story['branch']}")
-        return
-    i = task["stories"].index(story)
-    prev = task["stories"][i - 1].get("branch") if i else None
-    if prev and current != prev:
-        if not git_ok(name, "switch", prev):
-            die(f"cannot switch to {prev}")
-        current = prev
-    story["branch"], story["prBase"] = f"{task['branch']}/{story['id']}", current
-    if not git_ok(name, "switch", "-c", story["branch"]):
-        die(f"cannot create branch {story['branch']}")
-    save(name, task)
-
-
-def open_pr(name, task, story, title):
-    body_file = tdir(name) / "logs" / f"{story['id']}-pr.md"
-    reviews = sorted((tdir(name) / "reviews").glob(f"{story['id']}-a{story['attempts']}-*.md")) if (tdir(name) / "reviews").exists() else []
-    body_file.write_text("\n".join([
-        f"Story {story['id']} of task `{name}`: {story['title']}",
-        "",
-        "## Acceptance criteria",
-        *[f"- {c}" for c in story["criteria"]],
-        "",
-        "## Checks and reviews",
-        *[f"- `{c}` passed" for c in task.get("checks", [])],
-        *[f"- {r.stem.split('-', 2)[2]}: pass" for r in reviews if verdict(r)],
-        "",
-        f"Passed on attempt {story['attempts']}. Base branch: `{story['prBase']}`.",
-    ]) + "\n")
-    cmd = task.get("prCommand", PR_COMMAND)
-    for key, value in {"base": story["prBase"], "branch": story["branch"], "title": title, "body_file": str(body_file)}.items():
-        cmd = cmd.replace("{" + key + "}", shlex.quote(value))
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if r.returncode != 0:
-        log(name, f"{story['id']} PR command failed: {((r.stderr or r.stdout).strip().splitlines() or [''])[-1]}")
-        return
-    story["pr"] = (r.stdout.strip().splitlines() or [""])[-1]
-    story["notes"] += f", PR {story['pr']}"
-    save(name, task)
-    log(name, f"{story['id']} PR opened: {story['pr']}")
-
-
-def finish_story(name, task, story):
-    """Commit a passed story. Push it and open a PR when the task asks for that."""
+def deliver(name, task, story, cmd):
+    """Hand over a passed story. Returns False when the delivery did not happen."""
     title = f"{task.get('commitType', 'feat')}({name}): {story['title']} ({story['id']})"
-    if not git_ok(name, "add", "-A"):
-        return
+    step = task.get("deliver")
+    if not step:
+        # The built-in way: one commit on the task branch.
+        if not task.get("commit"):
+            return True
+        if not git_ok(name, "add", "-A"):
+            return False
+        if task.get("leaveOut"):
+            subprocess.run(["git", "reset", "-q", "--", *task["leaveOut"]], capture_output=True)
+        if not git_ok(name, "commit", "-m", title):
+            return False
+        if task.get("push") and git_ok(name, "push", "-u", "origin", "HEAD"):
+            print(f"{story['id']} pushed", flush=True)
+        return True
+
+    # The project's own way: a fresh agent follows the deliver step file,
+    # and a second fresh agent reviews the branch, the commit and the PR.
+    result = tdir(name) / "logs" / f"{story['id']}-delivered.txt"
+    check = task.get("deliverReview", "review-delivery")
+    extra = [
+        f"- Title for the commit and the PR: `{title}`",
+        f"- Reviews of this story: `{tdir(name) / 'reviews'}/{story['id']}-a{story['attempts']}-*.md`",
+        f"- Delivery result file: `{result}`. One line: the PR link, or the branch name if there is no PR.",
+    ]
     if task.get("leaveOut"):
-        subprocess.run(["git", "reset", "-q", "--", *task["leaveOut"]], capture_output=True)
-    if not git_ok(name, "commit", "-m", title):
-        return
-    if task.get("push") or task.get("pr"):
-        if not git_ok(name, "push", "-u", "origin", "HEAD"):
-            return
-        print(f"{story['id']} pushed", flush=True)
-        if task.get("pr"):
-            open_pr(name, task, story, title)
+        extra.append("- These files were changed before the task. They must stay uncommitted: " + ", ".join(f"`{p}`" for p in task["leaveOut"]))
+    story["delivered"] = False
+    save(name, task)
+    before, feedback = git("rev-parse", "HEAD"), ""
+    for _ in range(task["maxAttempts"]):
+        run_agent(with_model(cmd, model_for(task, step, "deliver", story)),
+                  make_prompt(name, task, step, story, "deliver", feedback, extra), name, story, step)
+        if git("rev-parse", "HEAD") == before:
+            log(name, f"{story['id']} not delivered: the deliver step made no commit")
+            return False
+        if not check:
+            break
+        review_path(name, story, check).unlink(missing_ok=True)
+        run_agent(with_model(cmd, model_for(task, check, "review", story)),
+                  make_prompt(name, task, check, story, "review", extra=extra), name, story, check)
+        passed = verdict(review_path(name, story, check))
+        log(name, f"{story['id']} {check} {'pass' if passed else 'fail'}")
+        if passed:
+            break
+        feedback = f"  - Read `{review_path(name, story, check)}` and fix every blocking finding."
+    else:
+        return False
+    story["delivered"] = True
+    where = result.read_text().strip().splitlines()[0] if result.exists() and result.read_text().strip() else ""
+    story["notes"] += f", delivered {where}".rstrip()
+    save(name, task)
+    log(name, f"{story['id']} delivered {where}".rstrip())
+    return True
 
 
 def parse_models(pairs):
@@ -329,8 +323,9 @@ def cmd_init(a):
     }
     if a.push:
         task["push"] = True
-    if a.pr:
-        task["pr"] = task["commit"] = True
+    if a.deliver:
+        step_text(a.deliver)
+        task["deliver"] = a.deliver
     if a.model:
         task["models"] = parse_models(a.model)
     (d / ".gitignore").write_text("logs/\n")
@@ -478,11 +473,12 @@ def cmd_run(a):
         die('no agent command. Set LOOP_AGENT, for example: LOOP_AGENT="claude -p" or "codex exec -"')
     if not task.get("approved"):
         die(f"the plan is not approved. Review .loop/{a.task}/BOARD.md, then: loop.py approve {a.task}")
-    if task.get("commit") and not task.get("pr") and task.get("branch") and git("rev-parse", "--abbrev-ref", "HEAD") != task["branch"]:
+    own_git = task.get("commit") and not task.get("deliver")
+    if own_git and task.get("branch") and git("rev-parse", "--abbrev-ref", "HEAD") != task["branch"]:
         exists = git("rev-parse", "--verify", "--quiet", f"refs/heads/{task['branch']}")
         if not git_ok(a.task, "switch", *([] if exists else ["-c"]), task["branch"]):
             die(f"cannot switch to branch {task['branch']}")
-    if task.get("commit") and "leaveOut" not in task:
+    if (own_git or task.get("deliver")) and "leaveOut" not in task:
         # Files that were already changed before the first run are not the loop's to commit.
         task["leaveOut"] = sorted(p for p in dirty_paths() if not p.startswith(f".loop/{a.task}/"))
         save(a.task, task)
@@ -493,10 +489,22 @@ def cmd_run(a):
         print("note: models are set, but the agent command has no {model} in it, so they are not used")
     for check in task.get("checks", []):
         print(f"check: {check}")
-    if task.get("pr"):
-        print(f"pr: {task.get('prCommand', PR_COMMAND)}")
     for path in sorted((Path(".loop") / "steps").glob("*.md")):
         print(f"step override from this project: {path}")
+
+    def hand_over(story):
+        try:
+            ok = deliver(a.task, task, story, cmd)
+        except AgentFailed as e:
+            ok = False
+            print(e)
+        if not ok:
+            die(f"{story['id']} passed but was not delivered. Fix the problem and run again. The loop will retry the delivery.")
+
+    for story in task["stories"]:
+        if story["status"] == "done" and story.get("delivered") is False:
+            hand_over(story)
+
     rounds = 0
     while True:
         story = next_story(task, a.story)
@@ -504,8 +512,6 @@ def cmd_run(a):
             print("all stories done" if not story else f"{story['id']} is already done")
             break
         feedback = ""
-        if task.get("pr") and story["attempts"] < task["maxAttempts"]:
-            start_story_branch(a.task, task, story)
         while story["attempts"] < task["maxAttempts"]:
             if a.max_rounds and rounds >= a.max_rounds:
                 story["status"] = "todo"
@@ -532,8 +538,7 @@ def cmd_run(a):
             sys.exit(1)
         save(a.task, task)
         log(a.task, f"{story['id']} done")
-        if task.get("commit"):
-            finish_story(a.task, task, story)
+        hand_over(story)
         if a.story:
             break
 
@@ -549,7 +554,7 @@ def main():
     s.add_argument("--context", action="append", default=[], help="file every agent should read, repeatable")
     s.add_argument("--description", default="")
     s.add_argument("--push", action="store_true", help="push the task branch after each passed story")
-    s.add_argument("--pr", action="store_true", help="give each story its own branch and open a PR for it")
+    s.add_argument("--deliver", metavar="STEP", help="step file that hands over each passed story, for example deliver-pr")
     s.add_argument("--model", action="append", default=[], metavar="[WHERE=]NAME",
                    help="model for plan, build, review or one step, for example build=opus. No WHERE sets the default. Repeatable")
     s.set_defaults(fn=cmd_init)

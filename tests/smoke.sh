@@ -1,5 +1,18 @@
 #!/usr/bin/env sh
-# End to end test of loop.py with the fake agent, in a throwaway git project.
+# Tests loop.py from start to finish. Run it after every change: ./tests/smoke.sh
+#
+# It makes a throwaway git project in a temp folder, runs the loop there with
+# fake-agent.sh instead of a real agent, and checks the results. It costs
+# nothing and touches no real project. It prints "smoke test ok" or "FAIL: why".
+#
+# What it covers, in order:
+#   1. A normal run: approval gate, retry after a failed review, commits,
+#      criteria and story files, context files, unrelated files left alone.
+#   2. A check that never passes: the story ends up blocked.
+#   3. An agent command that crashes: the loop stops, the attempt is not counted.
+#   4. Models: the right model reaches each step.
+#   5. A deliver step: an agent hands over each story and another reviews the
+#      delivery. A failed delivery or a failed delivery review is retried.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 loop="$here/../loop.py"
@@ -16,6 +29,7 @@ fail() { echo "FAIL: $1"; exit 1; }
 echo private > my-notes.txt   # an untracked file from before the task
 echo edited >> SPEC.md         # an uncommitted edit from before the task
 
+# 1. A normal run.
 printf -- '- [ ] from file one\n- from file two\n' > criteria.txt
 printf '# Title with no bullets\n\n## Second story\n- one\n- two\n' > stories.md
 
@@ -38,50 +52,48 @@ git log --name-only --format= "$start"..HEAD | grep -q -e my-notes.txt -e SPEC.m
 git status --porcelain | grep -q '?? my-notes.txt' || fail "my-notes.txt should still be untracked"
 git log --name-only --format= "$start"..HEAD | grep -q built.txt || fail "the story's own file was not committed"
 
+# 2. A check that never passes.
 "$loop" init stuck --profile quick --check false >/dev/null
 "$loop" add stuck "Never passes" -c x >/dev/null
 "$loop" approve stuck >/dev/null
 "$loop" run stuck >/dev/null 2>&1 && fail "a failing check should block"
 grep -q '| blocked | 2 |' .loop/stuck/BOARD.md || fail "story should be blocked after 2 attempts"
 
+# 3. An agent command that crashes.
 "$loop" init crash --profile quick --check true >/dev/null
 "$loop" add crash "Agent dies" -c x >/dev/null
 "$loop" approve crash >/dev/null
 LOOP_AGENT="exit 3" "$loop" run crash >/dev/null 2>&1 && fail "a crashed agent should stop the loop"
 grep -q '| S1 | Agent dies | todo | 0 |' .loop/crash/BOARD.md || fail "a crashed agent should not count as an attempt"
 
-# Models: the story wins, then the step, then the phase, then the default.
+# 4. Models: the story wins, then the step, then the phase, then the default.
 git switch -q -c models-test
 export FAKE_MODEL_LOG="$tmp/models.log"
-"$loop" init models --profile feature --check true --model small --model build=big --model review-quality=mid >/dev/null
+"$loop" init models --profile feature --check true --model small --model build=big --model review-simplicity=mid >/dev/null
 "$loop" add models "Normal story" -c x >/dev/null
 "$loop" add models "Hard story" -c x --model huge >/dev/null
 "$loop" approve models >/dev/null
 "$loop" run models --agent "$here/fake-agent.sh {model}" >/dev/null || fail "models run did not finish"
-[ "$(tr '\n' ' ' < "$FAKE_MODEL_LOG")" = "big small mid small huge huge huge huge " ] || fail "wrong models: $(tr '\n' ' ' < "$FAKE_MODEL_LOG")"
+[ "$(tr '\n' ' ' < "$FAKE_MODEL_LOG")" = "big small mid huge huge huge " ] || fail "wrong models: $(tr '\n' ' ' < "$FAKE_MODEL_LOG")"
 unset FAKE_MODEL_LOG
 LOOP_PLAN_AGENT='printf "%s|%s" {model} {prompt} > plan-out.txt' "$loop" plan models plan-stories --start
 grep -q '^small|# Plan 4: stories' plan-out.txt || fail "plan --start did not pass the model and prompt"
 rm plan-out.txt
 
-# PR mode: a branch and a PR per story, each stacked on the one before.
-git init -q --bare "$tmp/remote.git" && git remote add origin "$tmp/remote.git"
-git switch -q -c pr-base
-"$loop" init prs --profile quick --check true --pr >/dev/null
-"$loop" add prs "One" -c x >/dev/null
-"$loop" add prs "Two" -c y >/dev/null
-python3 - <<'PY'
-import json
-p = ".loop/prs/task.json"; t = json.load(open(p))
-t["prCommand"] = "echo https://example.test/pr/{branch}/onto/{base}"
-json.dump(t, open(p, "w"), indent=2)
-PY
-"$loop" approve prs >/dev/null
-"$loop" run prs >/dev/null || fail "pr run did not finish"
-git --git-dir="$tmp/remote.git" branch | grep -q 'loop/prs/S1' || fail "S1 branch not pushed"
-git --git-dir="$tmp/remote.git" branch | grep -q 'loop/prs/S2' || fail "S2 branch not pushed"
-grep -q 'PR https://example.test/pr/loop/prs/S1/onto/pr-base' .loop/prs/BOARD.md || fail "S1 PR should target the starting branch"
-grep -q 'PR https://example.test/pr/loop/prs/S2/onto/loop/prs/S1' .loop/prs/BOARD.md || fail "S2 PR should target the S1 branch"
-[ "$(git log --oneline loop/prs/S1..loop/prs/S2 | wc -l)" -eq 1 ] || fail "S2 should be one commit on top of S1"
+# 5. A deliver step: an agent hands over each story, and a failed delivery is retried.
+"$loop" init handover --profile quick --check true --deliver deliver-pr >/dev/null
+"$loop" add handover "One" -c x >/dev/null
+"$loop" approve handover >/dev/null
+FAKE_SKIP_DELIVER=1 "$loop" run handover >/dev/null 2>&1 && fail "a delivery with no commit should stop the loop"
+grep -q '| S1 | One | done |' .loop/handover/BOARD.md || fail "the story itself should still be done"
+before=$(git rev-parse HEAD)
+rm -f .failed-once   # make the next review, the delivery review, fail once
+"$loop" run handover >/dev/null || fail "the delivery retry did not finish"
+[ "$(git rev-parse HEAD)" != "$before" ] || fail "the retry should have committed"
+grep -q 'delivered https://example.test/pr/1' .loop/handover/BOARD.md || fail "the PR link should be on the board"
+grep -q 'review-delivery fail' .loop/handover/progress.md || fail "the delivery review should fail once"
+grep -q 'review-delivery pass' .loop/handover/progress.md || fail "the delivery review should pass after the fix"
+grep -q 'fix every blocking finding' .loop/handover/logs/S1-a1-deliver-pr.prompt.md || fail "the second delivery should get the review findings"
+grep -q 'Title for the commit and the PR' .loop/handover/logs/S1-a1-deliver-pr.prompt.md || fail "deliver prompt lacks the title"
 
 echo "smoke test ok"

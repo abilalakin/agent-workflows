@@ -1,59 +1,52 @@
 # The process
 
-Two phases. The human leads the first. Agents run the second.
+Two phases. The human leads the first. The loop runs the second.
 
 ## Phase 1: plan, with the human
 
-The human runs each plan stage in an interactive agent session. `loop.py plan
-<task>` lists the stages and `loop.py plan <task> <stage>` prints the prompt.
+Run each plan stage in a chat with the human. `loop.py plan <task>` lists the
+stages, and `loop.py plan <task> <stage>` prints the prompt for one.
 
-1. **Interview.** The agent questions the human until the goal is clear.
-   Output: `notes.md`.
+1. **Interview.** Question the human until the goal is clear. Output: `notes.md`.
 2. **PRD.** Requirements that can be checked. Output: `prd.md`.
 3. **Architecture.** Where the change goes and why. Output: `architecture.md`.
-4. **Stories.** Small, ordered stories with acceptance criteria, added to
-   `task.json`.
+4. **Stories.** Small, ordered stories with acceptance criteria, added with
+   `loop.py add`.
 
 Small tasks and bugfixes skip to stage 4. The human then reads `BOARD.md` and
-runs `loop.py approve <task>`. The loop does not start before that.
+runs `loop.py approve <task>`. Nothing is built before that.
 
-## Phase 2: implement, by agents
+## Phase 2: build, by the loop
 
-`loop.py run <task>` does this. To do it by hand inside an agent session,
-follow the same steps. The files under `.loop/<task>/` are the state.
+`loop.py run <task>` takes the stories in order. For each one:
 
-For the first story in `task.json` that is not `done`:
+1. **Build.** A fresh agent follows the build step for this story.
+2. **Check.** The loop runs every check. A failure goes to step 5.
+3. **Review.** A fresh agent per review step writes a review file that starts
+   with `VERDICT: pass` or `VERDICT: fail`.
+4. **Deliver.** If every blocking review passed, the story is `done`. The loop
+   commits it, or a fresh agent follows the task's deliver step. After a
+   deliver step, another fresh agent reviews the branch, the commit and the
+   PR. A failed delivery review goes back to a new delivery agent once. If the
+   delivery still fails, the loop stops and retries it on the next run.
+5. **Retry.** Otherwise a new builder gets the failed check output or the
+   review files. After `maxAttempts` the story is `blocked` and the loop stops.
 
-1. Set its status to `building` and add one to `attempts`. Note the current
-   commit as the story's base.
-2. Build it by following `steps/<build step>.md` with the story as context.
-   Use a fresh subagent, so each story starts with a clean context.
-   `loop.py prompt <task>` prints the full prompt.
-3. Run the task's checks. If one fails, go to step 6.
-4. Set the status to `reviewing`. For each entry in `reviews`, follow that step
-   file in a fresh subagent. Each writes
-   `reviews/<story>-a<attempt>-<step>.md` starting with `VERDICT: pass` or
-   `VERDICT: fail`.
-5. If every blocking review passed, set the status to `done` and commit the
-   story. Then take the next story.
-   - Default: commit on the branch `loop/<task>`. Push if the task says so.
-   - If the task has `pr` set: before step 1, create the branch
-     `loop/<task>/<story>` from the branch of the story before it. After the
-     commit, push it and open a PR that targets that earlier branch.
-6. Otherwise go back to step 1 with the failed check output or the review files
-   as input. When `attempts` reaches `maxAttempts`, set the status to `blocked`
-   and stop. Tell the human what blocks it.
+The loop writes every status change to `task.json`, `BOARD.md` and
+`progress.md`.
 
-After every status change, run `loop.py status <task>` to refresh `BOARD.md`,
-and add a line to the log in `progress.md`.
-
-Rules:
+## Rules
 
 - One story at a time, in order.
-- The builder never reviews its own work.
-- Only the human widens the scope. New ideas go under "Follow-ups" in
-  `progress.md`.
-- Agents commit only passed stories, only on the task's branches, and only the
-  files the story changed. Files that were changed before the task stay out.
-- If the task sets `models`, use the model it names for each phase or step. A
-  model on a story wins.
+- The builder never reviews or delivers its own work.
+- Only the human approves a plan, widens the scope, or resets a blocked story.
+  New ideas go under "Follow-ups" in `progress.md`.
+- Only passed stories are delivered. Files that were changed before the task
+  stay out of the commits. Nothing is merged.
+
+## Without `loop.py run`
+
+If the loop cannot be started, do phase 2 by hand and keep the same rules. Use
+a fresh subagent for each step. `loop.py prompt <task> [step]` prints the
+prompt, `loop.py check <task>` runs the checks, and
+`loop.py set <task> <story> <status>` records each change.

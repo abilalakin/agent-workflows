@@ -13,7 +13,7 @@ experiment code is in the git history.
 - **Builders must not widen the spec.** One builder wrote a broad new rule into
   the spec, and the reviewers then enforced it. New rules are follow-ups.
 - **Do not trust the builder's report.** The loop runs the checks
-  itself, and the acceptance reviewer tests each criterion again. This caught a
+  itself, and the correctness reviewer tests each criterion again. This caught a
   real regression that the builder's own tests missed.
 - **Retry with the review text works.** A fresh builder fixed a rejected story
   from the review file alone.
@@ -22,3 +22,11 @@ experiment code is in the git history.
   the bill. So profiles differ in how many reviews they run.
 - **A small model finds real problems on small code.** A cheap model was
   enough for review on a 60-line app. Try the cheap one first.
+- **Script for mechanics, markdown for judgment.** A first real trial skipped
+  the script because its git handling did not fit the project. Coding each new
+  wish made the script more rigid. So the script keeps the loop, the counting
+  and the gates, and delivery became a step file a project can replace.
+- **Two reviewers with the same job find the same things.** The acceptance and
+  quality reviewers reported the same regression in almost the same words. They
+  are now one correctness review. Simplicity stays separate, because it pulls
+  the other way.
