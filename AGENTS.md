@@ -31,6 +31,24 @@ You are the operator. The loop does the building.
 - `profiles/*.json` pick the steps and skills per type of work.
 - State goes in the target project under `.loop/<task>/`, never in this repo.
 - The agent command comes from the user, never from a file in the project.
-- After a change, run `tests/smoke.sh` and add a case for new behaviour.
+- After a change, run `tests/smoke.sh` and add a case for new behaviour. It
+  uses `tests/fake-agent.sh`, so tests are free, fast and offline.
+- Pick the plain, obvious code over the clever one.
+- Comments: short and simple. One plain sentence that says why.
+- After a larger change: a review pass for bugs, fix what it finds, then a
+  simplification pass.
 - Keep README.md and LOOP.md in line with the script.
 - Ask before running the loop with a real agent.
+
+## Git workflow
+
+- Work goes straight to `main`, one commit per change. No branches or PRs:
+  this is a one-person repo.
+- Messages follow [Conventional Commits](https://www.conventionalcommits.org/):
+  `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`. Imperative mood
+  ("add", not "added"). `!` after the type for a breaking change.
+- One line, under 72 characters. No body, no `Co-Authored-By` or other
+  attribution lines.
+- At a commit point, show the changed files and the message, wait for the
+  user's OK, then commit. Commits are signed with the personal key set in
+  `.git/config`. Leave the global git config alone.
